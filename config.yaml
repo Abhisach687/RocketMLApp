@@ -1,0 +1,80 @@
+# config.yaml
+
+clean:
+  # Where to read raw CSVs and write cleaned Parquet
+  raw_dir: data/raw
+  out_dir: data/interim
+
+  # Cleaning options
+  dedupe: true
+  bot_threshold_per_day: 10000
+  drop_missing_category: false
+
+features:
+  # Inputs / outputs for feature engineering
+  in_dir: data/interim
+  out_dir: data/processed
+
+  # Forecast rolling-window (days) & horizon (days)
+  rolling_window_days: 30
+  forecast_horizon_days: 7
+
+  # Frequency for time-series features ("D" = daily)
+  freq: D
+
+  # Seq2Seq parameters for recommendation
+  max_seq_length: 50
+  min_interactions_per_user: 5
+
+  # Paths for processed outputs
+  item2idx_path: artefacts/item2idx.json
+  processed_forecast_path: forecast_features.parquet
+  processed_reco_path: reco_sequences.parquet
+
+models:
+  # Where to read features and write artifacts
+  features_dir: data/processed
+  artefacts_dir: artefacts
+
+  # Optuna tuning trials & validation split
+  optuna_trials: 50
+  val_split_days: 7
+
+  forecast:
+    # LightGBM training hyperparameters
+    objective: regression
+    metric: rmse
+    num_boost_round: 1000
+    early_stopping_rounds: 50
+    learning_rate: 0.10
+    num_leaves: 31
+
+  reco:
+    # GRU4Rec training hyperparameters
+    embedding_dim: 50
+    hidden_size: 100
+    batch_size: 256
+    learning_rate: 0.001
+    epochs: 10
+
+app:
+  # FastAPI serving settings
+  host: 0.0.0.0
+  port: 8000
+
+  # Paths to load models & lookup tables
+  lightgbm_model_path: artefacts/lightgbm_model.txt
+  gru_model_path: artefacts/gru4rec.pt
+  item2idx_path: artefacts/item2idx.json
+
+  # Paths to look up latest features & sequences at inference
+  forecast_features_path: data/processed/forecast_features.parquet
+  reco_sequences_path: data/processed/reco_sequences.parquet
+
+  # Should match features.max_seq_length
+  max_seq_length: 50
+
+report:
+  # Report assembly
+  notebook_path: notebooks/99_report.ipynb
+  pdf_path: reports/report.pdf
