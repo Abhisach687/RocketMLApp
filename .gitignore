@@ -13,6 +13,7 @@
 # Report figures - potentially large outputs
 /reports/eda/figures/
 /reports/figures/
+/reports
 *.png
 *.pdf
 
