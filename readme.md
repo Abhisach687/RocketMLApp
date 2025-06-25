@@ -1,4 +1,11 @@
+# Create the virtual environment
+python -m venv .venv
 .venv\Scripts\activate
+
+# Install the required packages
+pip install -r requirements.txt
+
+# Run the scripts
 
 python -m src.clean # uses paths & options in config.yaml
 
