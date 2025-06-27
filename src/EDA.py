@@ -26,7 +26,17 @@ print(f"Categories: {cats.shape[0]} rows, {cats.shape[1]} cols")
 for name, df in [('Events', events), ('Properties', props), ('Categories', cats)]:
     miss = df.isnull().mean() * 100
     print(f"\n{name} missing (%):")
-    print(miss[miss > 0].round(1))
+    # Show all columns with missing percentages
+    for col, pct in miss.round(1).items():
+        print(f"  {col}: {pct}%")
+    
+    # Alternative: only show columns with missing values
+    # missing_cols = miss[miss > 0].round(1)
+    # if len(missing_cols) > 0:
+    #     for col, pct in missing_cols.items():
+    #         print(f"  {col}: {pct}%")
+    # else:
+    #     print("  No missing values")
 
 # %% [markdown]
 # ## 2. Event-Type Distribution & Time Patterns
@@ -100,27 +110,66 @@ ax.set_title(f'Top {top_n} Items by Count')
 ax.set_xlabel('Count')
 plt.show()
 
-fig, ax = plt.subplots(figsize=(6,4))
-cum = item_counts.cumsum() / item_counts.sum()
-cum.plot(ax=ax)
-ax.axhline(0.8, color='red', linestyle='--')
-ax.set_title('Cumulative Coverage by Item Rank')
-ax.set_xlabel('Rank')
-ax.set_ylabel('Cumulative %')
+# Long-tail analysis: what % of events are covered by top N items
+fig, ax = plt.subplots(figsize=(10,6))
+cum_pct = item_counts.cumsum() / item_counts.sum()
+ranks = range(1, len(cum_pct) + 1)
+
+# Plot with different ranges for better visualization
+# First, let's see how many items we need for 90% coverage
+items_90_needed = (cum_pct >= 0.9).idxmax() + 1
+max_rank = min(int(items_90_needed * 1.2), len(cum_pct))  # Show 20% beyond 90% mark
+ax.plot(ranks[:max_rank], cum_pct.iloc[:max_rank], linewidth=2, color='steelblue')
+
+# Add reference lines with annotations
+ax.axhline(0.5, color='green', linestyle='--', alpha=0.7, label='50% coverage')
+ax.axhline(0.8, color='red', linestyle='--', alpha=0.7, label='80% coverage')
+ax.axhline(0.9, color='orange', linestyle='--', alpha=0.7, label='90% coverage')
+
+# Find key points and annotate them
+items_50 = (cum_pct >= 0.5).idxmax() + 1
+items_80 = (cum_pct >= 0.8).idxmax() + 1
+items_90 = (cum_pct >= 0.9).idxmax() + 1
+
+# Add vertical lines and annotations for key points
+if items_50 <= max_rank:
+    ax.axvline(items_50, color='green', linestyle=':', alpha=0.5)
+    ax.annotate(f'{items_50} items\n(50%)', xy=(items_50, 0.5), 
+                xytext=(items_50 + max_rank*0.1, 0.45), fontsize=9,
+                arrowprops=dict(arrowstyle='->', alpha=0.6))
+
+if items_80 <= max_rank:
+    ax.axvline(items_80, color='red', linestyle=':', alpha=0.5)
+    ax.annotate(f'{items_80} items\n(80%)', xy=(items_80, 0.8), 
+                xytext=(items_80 + max_rank*0.1, 0.75), fontsize=9,
+                arrowprops=dict(arrowstyle='->', alpha=0.6))
+
+if items_90 <= max_rank:
+    ax.axvline(items_90, color='orange', linestyle=':', alpha=0.5)
+    ax.annotate(f'{items_90} items\n(90%)', xy=(items_90, 0.9), 
+                xytext=(items_90 + max_rank*0.1, 0.85), fontsize=9,
+                arrowprops=dict(arrowstyle='->', alpha=0.6))
+
+ax.set_title('Long-tail Distribution: Cumulative Event Coverage by Item Popularity', fontsize=12, pad=20)
+ax.set_xlabel('Number of Top Items (ranked by popularity)', fontsize=10)
+ax.set_ylabel('Cumulative % of All Events', fontsize=10)
+ax.legend(loc='lower right')
+ax.grid(True, alpha=0.3)
+
+# Format y-axis as percentages
+ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: '{:.0%}'.format(y)))
+
+# Set axis limits for better view
+ax.set_xlim(0, max_rank)
+ax.set_ylim(0, 1)
+
+plt.tight_layout()
 plt.show()
 
-# %% [markdown]
-# ## 5. Category Insights (with Names)
+# Print some key statistics
+print(f"Top 10 items cover: {cum_pct.iloc[9]:.1%} of all events")
+print(f"Top 100 items cover: {cum_pct.iloc[99]:.1%} of all events")
+print(f"Items needed for 80% coverage: {(cum_pct >= 0.8).idxmax() + 1}")
+print(f"Items needed for 90% coverage: {(cum_pct >= 0.9).idxmax() + 1}")
+print(f"Total unique items: {len(item_counts)}")
 
-# %%
-# Map item→categoryid→name
-cat_map = props[props['property']=='categoryid'][['itemid','value']]
-cat_map.columns=['itemid','categoryid']
-ec = events.merge(cat_map, on='itemid', how='left')
-ec['cat_name'] = ec['categoryid'].fillna(-1).astype(int).map(lambda x: f"Category {x}" if x>=0 else 'Unknown')
-
-fig, ax = plt.subplots(figsize=(6,5))
-ec['cat_name'].value_counts().head(top_n).sort_values().plot.barh(ax=ax)
-ax.set_title('Top Categories by Count')
-ax.set_xlabel('Count')
-plt.show()
