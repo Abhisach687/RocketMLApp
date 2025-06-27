@@ -144,15 +144,19 @@ def clean_category(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, Any]]:
     df = df.drop_duplicates(subset=["categoryid"])
     stats["duplicates_dropped"] = before - len(df)
 
-    # cast to Int64
+    # cast to Int64 and fill missing parentid with -1
     df["categoryid"] = pd.to_numeric(df["categoryid"], errors="coerce").astype("Int64")
     if "parentid" in df.columns:
-        df["parentid"] = pd.to_numeric(df["parentid"], errors="coerce").astype("Int64")
+        df["parentid"] = (
+            pd.to_numeric(df["parentid"], errors="coerce")
+              .fillna(-1)               # treat NaN as root category
+              .astype("Int64")
+        )
 
     stats.update({
-        "rows_after":         len(df),
-        "unique_categories":  int(df["categoryid"].nunique()),
-        "unique_parents":     int(df["parentid"].nunique()) if "parentid" in df.columns else 0,
+        "rows_after":        len(df),
+        "unique_categories": int(df["categoryid"].nunique()),
+        "unique_parents":    int(df["parentid"].nunique()) if "parentid" in df.columns else 0,
     })
     return df, stats
 
