@@ -28,18 +28,18 @@ models:
   artefacts_dir: artefacts
   features_dir: data/processed
   forecast:
-    bagging_fraction: 0.7017410651716997
-    bagging_freq: 3
+    bagging_fraction: 0.8224507808606525
+    bagging_freq: 10
     drop_zero_target: true
     early_stopping_rounds: 30
-    feature_fraction: 0.9807646323675764
-    lambda_l1: 1.3317603478605546
-    lambda_l2: 0.020647496888965056
-    learning_rate: 0.1453407588647221
+    feature_fraction: 0.8227344112609893
+    lambda_l1: 0.4570098424675586
+    lambda_l2: 7.6773815425519825
+    learning_rate: 0.28998330671106737
     metric: mae
-    min_data_in_leaf: 68
+    min_data_in_leaf: 7
     num_boost_round: 300
-    num_leaves: 16
+    num_leaves: 20
     objective: regression
     optuna_db_path: artefacts/optuna_forecast.db
     optuna_pruner: median
