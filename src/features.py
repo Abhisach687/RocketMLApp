@@ -1,12 +1,6 @@
 """
 Enhanced feature‑engineering for the RetailRocket dataset
 (FORECAST + RECOMMENDATION) with visible TQDM progress bars.
-
-Outputs
--------
-data/processed/forecast_features.parquet
-data/processed/reco_sequences.parquet
-artefacts/item2idx.json
 """
 from __future__ import annotations
 import argparse, json, logging
@@ -26,7 +20,6 @@ def _load_cfg(path: Path) -> Dict[str, Any]:
 
 
 def _rolling_sum(df: pd.DataFrame, window: int, col: str) -> pd.Series:
-    """Item‑level rolling sum with min_periods=1."""
     return (
         df.sort_values(["itemid", "date"])
           .groupby("itemid")[col]
@@ -42,14 +35,13 @@ def _smooth(series: pd.Series, cat_series: pd.Series, alpha: float = 10.0) -> pd
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-def build_forecast_features(events: pd.DataFrame,
-                            props:  pd.DataFrame,
-                            cfg:    Dict[str, Any]) -> pd.DataFrame:
-    """Return enhanced item‑daily feature frame."""
+def build_forecast_features(events: pd.DataFrame, props: pd.DataFrame,
+                            cfg: Dict[str, Any]) -> pd.DataFrame:
+
     df = events.copy()
     df["date"] = df["timestamp"].dt.normalize()
 
-    # ── Daily counts ─────────────────────────────────────────────────────────
+    # Daily counts
     daily = (
         df.pivot_table(index=["itemid", "date"],
                        columns="event",
@@ -64,31 +56,29 @@ def build_forecast_features(events: pd.DataFrame,
     for c in ["views", "adds", "sales"]:
         daily[c] = daily.get(c, 0)
 
-    # ── Price ────────────────────────────────────────────────────────────────
+    # Price
     price_df = props.loc[props["property"] == "price", ["itemid", "value"]]\
                     .rename(columns={"value": "price"})
     price_df["price"] = pd.to_numeric(price_df["price"], errors="coerce")
     daily = daily.merge(price_df.drop_duplicates("itemid"), on="itemid", how="left")
     daily["price"] = daily["price"].ffill()
 
-    # ── Category ─────────────────────────────────────────────────────────────
+    # Category
     cat_df = props.loc[props["property"] == "categoryid", ["itemid", "value"]]\
                   .rename(columns={"value": "categoryid"})\
                   .drop_duplicates("itemid")
     daily = daily.merge(cat_df, on="itemid", how="left")
 
-    # ── Rolling windows ──────────────────────────────────────────────────────
-    roll_windows = cfg["features"].get("rolling_windows", [3, 7, 14, 30, 60])
-    for w in tqdm(roll_windows, desc="Rolling windows"):
-        for col in ["views", "adds", "sales"]:
-            daily[f"{col}_sum_{w}d"] = _rolling_sum(daily, w, col)
+    # Rolling windows
+    for w in tqdm(cfg["features"].get("rolling_windows", [3, 7, 14, 30, 60]),
+                  desc="Rolling windows", unit="window"):
+        for c in ["views", "adds", "sales"]:
+            daily[f"{c}_sum_{w}d"] = _rolling_sum(daily, w, c)
 
-    # ── Lags ─────────────────────────────────────────────────────────────────
-    lag_days = cfg["features"].get("lag_days", [1, 7, 14])
+    # Lags
     daily = daily.sort_values(["itemid", "date"])
-    for lag in lag_days:
+    for lag in cfg["features"].get("lag_days", [1, 7, 14]):
         daily[f"sales_lag_{lag}d"] = daily.groupby("itemid")["sales"].shift(lag).fillna(0)
-    # Same weekday last week
     daily["sales_lag_dow"] = (
         daily.groupby("itemid")["sales"].shift(7)
              .where(daily["date"].dt.dayofweek ==
@@ -96,13 +86,13 @@ def build_forecast_features(events: pd.DataFrame,
              .fillna(0)
     )
 
-    # ── Ratios & smoothed ratios ─────────────────────────────────────────────
+    # Ratios & smoothed ratios
     daily["ctr_7d"]     = daily["adds_sum_7d"]  / daily["views_sum_7d"].replace(0, np.nan)
     daily["buyrate_7d"] = daily["sales_sum_7d"] / daily["views_sum_7d"].replace(0, np.nan)
     daily["ctr_sm_7d"]     = _smooth(daily["ctr_7d"].fillna(0),     daily["categoryid"])
     daily["buyrate_sm_7d"] = _smooth(daily["buyrate_7d"].fillna(0), daily["categoryid"])
 
-    # ── Category aggregates ──────────────────────────────────────────────────
+    # Category sales
     cat_sales = (
         daily.groupby(["categoryid", "date"])["sales_sum_7d"]
              .sum()
@@ -110,86 +100,78 @@ def build_forecast_features(events: pd.DataFrame,
              .reset_index()
     )
     daily = daily.merge(cat_sales, on=["categoryid", "date"], how="left")
-    daily["sales_sm_7d"] = _smooth(
-        daily["sales_sum_7d"],
-        daily["categoryid"],
-        alpha=cfg["features"].get("smooth_alpha", 5)
-    )
+    daily["sales_sm_7d"] = _smooth(daily["sales_sum_7d"],
+                                   daily["categoryid"],
+                                   alpha=cfg["features"].get("smooth_alpha", 5))
 
-    # ── Price change ─────────────────────────────────────────────────────────
+    # Price change
     daily["price_lag_7d"]     = daily.groupby("itemid")["price"].shift(7)
     daily["price_pct_chg_7d"] = (daily["price"] - daily["price_lag_7d"]) \
                                 / daily["price_lag_7d"].replace(0, np.nan)
 
-    # ── Calendar ─────────────────────────────────────────────────────────────
+    # Calendar
     daily["dow"]         = daily["date"].dt.dayofweek
     daily["is_weekend"]  = daily["dow"].isin([5, 6]).astype(int)
     daily["weekofyear"]  = daily["date"].dt.isocalendar().week.astype(int)
     daily["month"]       = daily["date"].dt.month
-    daily["day_of_year"] = daily["date"].dt.dayof_year
+    daily["day_of_year"] = daily["date"].dt.day_of_year  # ✅ fixed
     daily = pd.concat([daily,
                        pd.get_dummies(daily["dow"], prefix="dow", dtype="int8")],
                       axis=1)
 
-    # ── Target (next‑7‑day sales) ────────────────────────────────────────────
+    # Target
     tgt = daily[["itemid", "date", "sales"]].copy()
     tgt["date"] = tgt["date"] - pd.Timedelta(days=7)
-    tgt         = tgt.rename(columns={"sales": "target_next7"})
-    daily       = daily.merge(tgt, on=["itemid", "date"], how="left") \
-                       .fillna({"target_next7": 0})
+    tgt = tgt.rename(columns={"sales": "target_next7"})
+    daily = daily.merge(tgt, on=["itemid", "date"], how="left") \
+                 .fillna({"target_next7": 0})
 
     return daily.drop(columns=["views", "adds", "sales", "price_lag_7d", "dow"])
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-def build_reco_sequences(events: pd.DataFrame,
-                         props:  pd.DataFrame,
-                         cats:   pd.DataFrame,
-                         cfg:    Dict[str, Any]) -> tuple[pd.DataFrame, Dict[int, int]]:
+def build_reco_sequences(events: pd.DataFrame, props: pd.DataFrame,
+                         cats: pd.DataFrame, cfg: Dict[str, Any]):
 
-    df = events.copy()
-    uniques = df["itemid"].unique()
-    item2idx = {int(i): ix + 1 for ix, i in enumerate(uniques)}
+    df = events.sort_values(["visitorid", "timestamp"]).copy()
+    item2idx = {int(i): idx + 1 for idx, i in enumerate(df["itemid"].unique())}
     df["item_idx"] = df["itemid"].map(item2idx)
 
-    cat_map = props.loc[props["property"] == "categoryid",
-                        ["itemid", "value"]].rename(columns={"value": "categoryid"})
+    cat_map = props.loc[props["property"] == "categoryid", ["itemid", "value"]]\
+                    .rename(columns={"value": "categoryid"})
     cat2idx = {int(c): ix + 1 for ix, c in enumerate(cats["categoryid"].unique())}
     df = df.merge(cat_map, on="itemid", how="left")
     df["cat_idx"] = df["categoryid"].map(cat2idx).fillna(0).astype(int)
 
-    df = df.sort_values(["visitorid", "timestamp"])
-    grouped = df.groupby("visitorid")
-    max_len = cfg["features"]["max_seq_length"]
+    # Build sequences with progress bar
+    rows = []
+    for visitor, g in tqdm(df.groupby("visitorid"),
+                           desc="Reco Sequences", unit="visitor"):
+        g = g.tail(cfg["features"]["max_seq_length"])
+        rows.append({
+            "visitorid": visitor,
+            "item_seq":  list(g["item_idx"]),
+            "cat_seq":   list(g["cat_idx"]),
+            "time_seq":  list((g["timestamp"] - g["timestamp"].iloc[0])
+                              .dt.total_seconds() // 60)
+        })
 
-    item_seq = grouped["item_idx"].apply(lambda x: list(x.tail(max_len)))
-    cat_seq  = grouped["cat_idx"].apply(lambda x: list(x.tail(max_len)))
-    time_seq = grouped["timestamp"].apply(
-        lambda x: list((x - x.iloc[0]).dt.total_seconds() // 60)
-    )
-
-    reco_df = pd.DataFrame({
-        "visitorid": item_seq.index,
-        "item_seq":  item_seq.values,
-        "cat_seq":   cat_seq.values,
-        "time_seq":  time_seq.values,
-    })
-    return reco_df, item2idx
+    return pd.DataFrame(rows), item2idx
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Feature engineering")
-    parser.add_argument("--cfg",     default="config.yaml")
-    parser.add_argument("--in_dir",  default=None)
-    parser.add_argument("--out_dir", default=None)
-    parser.add_argument("--art_dir", default=None)
-    args = parser.parse_args()
+    p = argparse.ArgumentParser(description="Feature engineering")
+    p.add_argument("--cfg", "--config", default="config.yaml")
+    p.add_argument("--in_dir",  default=None)
+    p.add_argument("--out_dir", default=None)
+    p.add_argument("--art_dir", default=None)
+    a = p.parse_args()
 
-    cfg      = _load_cfg(Path(args.cfg))
-    in_dir   = Path(args.in_dir or cfg["features"]["in_dir"])
-    out_dir  = Path(args.out_dir or cfg["features"]["out_dir"])
-    art_dir  = Path(args.art_dir or cfg["features"].get("artefacts_dir", "artefacts"))
+    cfg     = _load_cfg(Path(a.cfg))
+    in_dir  = Path(a.in_dir or cfg["features"]["in_dir"])
+    out_dir = Path(a.out_dir or cfg["features"]["out_dir"])
+    art_dir = Path(a.art_dir or cfg["features"].get("artefacts_dir", "artefacts"))
     out_dir.mkdir(parents=True, exist_ok=True)
     art_dir.mkdir(parents=True, exist_ok=True)
 
@@ -210,7 +192,7 @@ def main() -> None:
     with open(art_dir / "item2idx.json", "w", encoding="utf‑8") as f:
         json.dump(item2idx, f)
 
-    logging.info("✔ Feature engineering done")
+    logging.info("✔ Feature engineering done.")
 
 
 if __name__ == "__main__":

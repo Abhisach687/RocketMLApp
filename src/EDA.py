@@ -173,3 +173,5 @@ print(f"Items needed for 80% coverage: {(cum_pct >= 0.8).idxmax() + 1}")
 print(f"Items needed for 90% coverage: {(cum_pct >= 0.9).idxmax() + 1}")
 print(f"Total unique items: {len(item_counts)}")
 
+
+# %%
