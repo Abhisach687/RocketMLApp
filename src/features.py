@@ -19,7 +19,7 @@ def _load_cfg(path: Path) -> Dict[str, Any]:
         return yaml.safe_load(f)
 
 
-def _rolling_sum(df: pd.DataFrame, window: int, col: str) -> pd.Series:
+def _rolling_sum(df: pd.DataFrame, window: int, col: str) -> pd.Series  :
     return (
         df.sort_values(["itemid", "date"])
           .groupby("itemid")[col]
@@ -114,7 +114,7 @@ def build_forecast_features(events: pd.DataFrame, props: pd.DataFrame,
     daily["is_weekend"]  = daily["dow"].isin([5, 6]).astype(int)
     daily["weekofyear"]  = daily["date"].dt.isocalendar().week.astype(int)
     daily["month"]       = daily["date"].dt.month
-    daily["day_of_year"] = daily["date"].dt.day_of_year  # ✅ fixed
+    daily["day_of_year"] = daily["date"].dt.day_of_year  
     daily = pd.concat([daily,
                        pd.get_dummies(daily["dow"], prefix="dow", dtype="int8")],
                       axis=1)
