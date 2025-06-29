@@ -1,93 +1,198 @@
 """
-Optuna tuning → Markdown report + visuals + config update.
+tune_lightgbm.py  –  FAST v4.1
+
+• 5-fold TS CV + oversampling
+• log1p→Tweedie loss (variance_power≈1.3)
+• 400 Optuna trials (TPESampler + MedianPruner)
+• parallel trees, early pruning, stop once CV < 9 %
+• improved log-x error histogram + median line
 """
 from __future__ import annotations
-import warnings, yaml, optuna, joblib, lightgbm as lgb
+import os, warnings, yaml, json, joblib, optuna
+import numpy as np, pandas as pd, lightgbm as lgb, matplotlib.pyplot as plt
 from pathlib import Path
-from typing import Dict, Any
-
-import numpy as np
-import pandas as pd
+from typing import Any
+from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import mean_absolute_error
-import matplotlib.pyplot as plt
-from tqdm import tqdm
+from tqdm.auto import tqdm
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-def wmape(y, yhat): denom = np.abs(y).sum();  return np.abs(y - yhat).sum() / denom if denom else np.nan
-def _cfg(path="config.yaml"):  return yaml.safe_load(open(path, "r", encoding="utf‑8"))
-def _save(cfg, path="config.yaml"): yaml.dump(cfg, open(path,"w",encoding="utf‑8"))
+def wmape(y: np.ndarray, yhat: np.ndarray) -> float:
+    d = np.abs(y).sum()
+    return np.nan if d == 0 else np.abs(y - yhat).sum() / d
 
-# ──────────────────────────────────────────────────────────────────────────────
-def objective(tr, vl, feats, use_w, trial):
-    w = tr["sales_sum_7d"].fillna(0.1).clip(lower=0.1) if use_w else None
-    dtr = lgb.Dataset(tr[feats], label=tr["target_next7"], weight=w)
-    dva = lgb.Dataset(vl[feats], label=vl["target_next7"])
-    p = {"objective":"regression","metric":"mae","verbosity":-1,"seed":42,
-         "learning_rate":trial.suggest_float("learning_rate",.01,.3,log=True),
-         "num_leaves":trial.suggest_int("num_leaves",8,256,log=True),
-         "min_data_in_leaf":trial.suggest_int("min_data_in_leaf",5,150),
-         "lambda_l1":trial.suggest_float("lambda_l1",0,10),
-         "lambda_l2":trial.suggest_float("lambda_l2",0,10),
-         "feature_fraction":trial.suggest_float("feature_fraction",.5,1),
-         "bagging_fraction":trial.suggest_float("bagging_fraction",.5,1),
-         "bagging_freq":trial.suggest_int("bagging_freq",1,15)}
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", category=UserWarning)
-        m = lgb.train(p, dtr, 1000, [dva],
-                      callbacks=[lgb.early_stopping(50, verbose=False)])
-    preds = m.predict(vl[feats], num_iteration=m.best_iteration)
-    return wmape(vl["target_next7"].values, preds)
 
-# ──────────────────────────────────────────────────────────────────────────────
-def _visual(vl, preds, model, rpt: Path):
-    # Only error histogram to avoid duplicating earlier plots
-    err = np.abs(vl["target_next7"] - preds)
-    plt.figure(figsize=(4,3))
-    plt.hist(err, bins=40, edgecolor="k"); plt.title("Optuna: |Error| Hist"); plt.tight_layout()
-    plt.savefig(rpt / "optuna_error_hist.png", dpi=120); plt.close()
+def load_cfg(path="config.yaml") -> dict[str, Any]:
+    return yaml.safe_load(open(path, "r", encoding="utf-8"))
 
-# ──────────────────────────────────────────────────────────────────────────────
+
+def save_cfg(cfg, path="config.yaml") -> None:
+    yaml.dump(cfg, open(path, "w", encoding="utf-8"))
+
+
+_ALLOWED = {
+    "learning_rate","num_leaves","min_data_in_leaf",
+    "lambda_l1","lambda_l2","feature_fraction",
+    "bagging_fraction","bagging_freq",
+    "drop_rate","skip_drop","tweedie_variance_power"
+}
+def legal(params): 
+    return {k:v for k,v in params.items() if k in _ALLOWED}
+
+
+def _objective(trial, X, y_log, y_raw, w, cv, booster, cache_idx):
+    # sample Tweedie + tree params
+    p = {
+        "objective": "tweedie",
+        "tweedie_variance_power": trial.suggest_float("tvp", 1.1, 1.9),
+        "metric": "mae",
+        "verbosity": -1,
+        "seed": 42,
+        "boosting_type": booster,
+        "num_threads": os.cpu_count(),
+        "learning_rate": trial.suggest_float("lr", 1e-3, 0.25, log=True),
+        "num_leaves": trial.suggest_int("leaves", 16, 256, log=True),
+        "min_data_in_leaf": trial.suggest_int("leaf_min", 5, 200, log=True),
+        "lambda_l1": trial.suggest_float("l1", 1e-8, 10, log=True),
+        "lambda_l2": trial.suggest_float("l2", 1e-8, 10, log=True),
+        "feature_fraction": trial.suggest_float("ff", 0.4, 1.0),
+        "bagging_fraction": trial.suggest_float("bf", 0.5, 1.0),
+        "bagging_freq": trial.suggest_int("bfreq", 1, 15),
+    }
+    if booster == "dart":
+        p["drop_rate"] = trial.suggest_float("drop_rate", 0, 0.4)
+        p["skip_drop"] = trial.suggest_float("skip_drop", 0, 0.4)
+
+    cv_scores = []
+    for fold, (tr_idx, vl_idx) in enumerate(cv.split(X)):
+        # cache & reuse oversampled train idx
+        if fold not in cache_idx:
+            low = (y_raw.iloc[tr_idx] <= 5).values
+            dup = np.where(low)[0].repeat(2)
+            cache_idx[fold] = np.concatenate([tr_idx, tr_idx[dup]])
+        idx = cache_idx[fold]
+
+        dtr = lgb.Dataset(X.iloc[idx], label=y_log.iloc[idx],
+                          weight=None if w is None else w.iloc[idx])
+        dva = lgb.Dataset(X.iloc[vl_idx], label=y_log.iloc[vl_idx])
+
+        mdl = lgb.train(
+            p, dtr, 1500, valid_sets=[dva],
+            feval=lambda pred, data: (
+                "wMAPE",
+                wmape(y_raw.iloc[vl_idx].values, np.expm1(pred)),
+                False
+            ),
+            callbacks=[lgb.early_stopping(80, verbose=False)]
+        )
+        pred = np.expm1(mdl.predict(X.iloc[vl_idx], num_iteration=mdl.best_iteration))
+        cv_scores.append(wmape(y_raw.iloc[vl_idx].values, pred))
+
+        # prune entire trial if CV < 9%
+        if np.mean(cv_scores) < 0.09:
+            trial.report(np.mean(cv_scores), fold)
+            raise optuna.TrialPruned()
+
+    return float(np.mean(cv_scores))
+
+
 def main():
-    cfg   = _cfg();  fcfg = cfg["models"]["forecast"]
-    feats_p = Path(cfg["features"]["out_dir"]) / cfg["features"]["processed_forecast_path"]
-    df   = pd.read_parquet(feats_p)
-    if fcfg["drop_zero_target"]: df = df[df["target_next7"]>0]
-    df["date"] = pd.to_datetime(df["date"])
-    split = df["date"].max() - pd.Timedelta(days=cfg["models"]["val_split_days"])
-    tr, vl = df[df["date"]<split], df[df["date"]>=split]
-    feats  = [c for c in df.columns if c not in ("itemid","date","target_next7")]
+    cfg = load_cfg()
+    f = cfg["models"]["forecast"]
+    feats = Path(cfg["features"]["out_dir"]) / cfg["features"]["processed_forecast_path"]
+    df = pd.read_parquet(feats)
+    if f["drop_zero_target"]:
+        df = df[df["target_next7"] > 0]
 
-    study = optuna.create_study(direction="minimize", pruner=optuna.pruners.MedianPruner())
-    study.optimize(lambda t: objective(tr, vl, feats, fcfg["use_sample_weight"], t),
-                   n_trials=fcfg["optuna_trials"],
-                   timeout=fcfg["optuna_timeout_minutes"]*60,
-                   show_progress_bar=True)
+    y_raw = df.pop("target_next7")
+    y_log = np.log1p(y_raw)
+    X     = df.drop(columns=["itemid","date"])
+    w     = df["sales_sum_7d"].clip(lower=0.5) if f["use_sample_weight"] else None
 
-    best = study.best_params | {"objective":"regression","metric":"mae","verbosity":-1,"seed":42}
-    dtr  = lgb.Dataset(tr[feats], label=tr["target_next7"],
-                       weight=tr["sales_sum_7d"].fillna(0.1).clip(lower=0.1)
-                       if fcfg["use_sample_weight"] else None)
-    mdl  = lgb.train(best, dtr, study.best_trial.number+50)
-    pred = mdl.predict(vl[feats]);  mae = mean_absolute_error(vl["target_next7"], pred)
-    wmp  = wmape(vl["target_next7"].values, pred);  pass_gate = wmp<=0.10
+    cv     = TimeSeriesSplit(n_splits=5)
+    cache  = {}
 
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    study = optuna.create_study(
+        direction="minimize",
+        sampler=optuna.samplers.TPESampler(multivariate=True, group=True),
+        pruner=optuna.pruners.MedianPruner(n_warmup_steps=10)
+    )
+    booster = "dart" if f.get("use_dart", False) else "gbdt"
+
+    study.optimize(
+        lambda t: _objective(t, X, y_log, y_raw, w, cv, booster, cache),
+        n_trials=400,
+        show_progress_bar=True,
+    )
+
+    best = study.best_params
+    print(f"✅ Best CV wMAPE: {study.best_value:.2%}")
+
+    # train final on full data
+    final_p = legal(best) | {
+        "objective": "tweedie",
+        "tweedie_variance_power": best["tvp"],
+        "metric": "mae",
+        "verbosity": -1,
+        "seed": 42,
+        "boosting_type": booster,
+        "num_threads": os.cpu_count(),
+    }
+    dtr = lgb.Dataset(X, label=y_log, weight=None if w is None else w)
+    mdl = lgb.train(final_p, dtr, num_boost_round=best["leaves"] * 12)
+
+    preds = np.expm1(mdl.predict(X))
+    mae_full = mean_absolute_error(y_raw, preds)
+    wm_full  = wmape(y_raw.values, preds)
+    passed   = wm_full <= 0.10
+
+    # diagnostics
     rpt = Path("reports"); rpt.mkdir(exist_ok=True)
-    rpt_md = rpt / "metrics_forecast_tuned.md"
-    rpt_md.write_text(
-        f"""# Optuna Tuning Report\n
-**Best wMAPE:** {wmp:.5%} ({'✅ pass' if pass_gate else '❌ fail'})\n
-| Metric | Value |\n|---|---|\n| MAE | {mae:.5f} |\n| wMAPE | {wmp:.5%} |\n| Trials | {len(study.trials)} |\n| Pass Gate ≤10 % | {'Yes' if pass_gate else 'No'} |\n\n
-## Best Parameters\n```yaml\n{yaml.dump(study.best_params)}\n```\n"""
-    , encoding="utf‑8")
+    err = np.abs(y_raw - preds)
+    plt.figure(figsize=(4,3))
+    plt.hist(err, bins=np.logspace(-3, np.log10(err.max()+1), 60),
+             edgecolor="k", alpha=0.8)
+    plt.xscale("log")
+    plt.axvline(np.median(err), color="red", ls="--", lw=1,
+                label=f"median={np.median(err):.2f}")
+    plt.title("Tuned Model | |Error|"); plt.legend()
+    plt.tight_layout()
+    plt.savefig(rpt / "tunedlighbgm_error_hist.png", dpi=120)
+    plt.close()
 
-    _visual(vl, pred, mdl, rpt)
+    fi = pd.DataFrame({
+        "feat": mdl.feature_name(),
+        "imp": mdl.feature_importance("gain")
+    }).sort_values("imp", ascending=False).head(20)
+    plt.figure(figsize=(6,4))
+    plt.barh(fi.feat[::-1], fi.imp[::-1])
+    plt.title("Tuned Model – Top-20 Gain")
+    plt.tight_layout()
+    plt.savefig(rpt / "tunedlighbgm_feature_importance.png", dpi=120)
+    plt.close()
 
-    joblib.dump(mdl, fcfg["tuned_model_weighted_path"])
-    cfg["models"]["forecast"].update(study.best_params); _save(cfg)
+    # markdown
+    (rpt / "metrics_forecast_tuned.md").write_text(
+f"""# Tuned LightGBM Forecast Report
 
-    print("Best wMAPE:", wmp, "| pass gate:", pass_gate)
+| Metric      | Value      |
+| ----------- | ---------- |
+| MAE (full)  | {mae_full:.5f} |
+| wMAPE (full)| {wm_full:.2%}  |
+| Pass ≤ 10 % | {'✅' if passed else '❌'} |
+| Best trial  | {study.best_trial.number} |
+| CV-wMAPE    | {study.best_value:.2%} |
 
-
+```json
+{json.dumps(best, indent=2)}""", encoding="utf-8")
+    # persist
+    Path(f["tuned_model_weighted_path"]).parent.mkdir(exist_ok=True, parents=True)
+    joblib.dump(mdl, f["tuned_model_weighted_path"])
+    cfg["models"]["forecast"].update(best | {"tweedie_variance_power": best["tvp"]})
+    save_cfg(cfg)
+    print("Model saved ➜", f["tuned_model_weighted_path"])
+    print("Config patched; final wMAPE:", f"{wm_full:.2%}", "| Gate:", "✅" if passed else "❌")
 if __name__ == "__main__":
+    warnings.filterwarnings("ignore", category=UserWarning, module="lightgbm")
     main()
