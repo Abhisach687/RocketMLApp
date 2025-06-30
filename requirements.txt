@@ -39,7 +39,7 @@ networkx==3.4.2
 numpy==1.26.4
 optuna==4.4.0
 packaging==25.0
-pandas==2.3.0
+pandas==2.2.5
 parso==0.8.4
 pdfkit==1.0.0
 pillow==11.2.1
@@ -54,7 +54,6 @@ pyparsing==3.2.3
 pyreadline3==3.5.4
 python-dateutil==2.9.0.post0
 pytz==2025.2
-pywin32==310
 PyYAML==6.0.2
 pyzmq==27.0.0
 requests==2.32.4
