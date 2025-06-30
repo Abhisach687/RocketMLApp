@@ -1,21 +1,4 @@
-# Data directory - contains large CSV and parquet files
-/data/raw/
-/data/interim/
-/data/processed/
 
-# Model artifacts directory - contains trained models and mappings
-/artefacts/
-*.db
-*.pt
-*.txt
-*.json
-
-# Report figures - potentially large outputs
-/reports/eda/figures/
-/reports/figures/
-/reports
-*.png
-*.pdf
 
 # Jupyter notebook checkpoints
 .ipynb_checkpoints/
@@ -38,6 +21,3 @@ env/
 # OS specific files
 .DS_Store
 Thumbs.db
-
-# Local configuration that shouldn't be committed
-config_local.yaml
