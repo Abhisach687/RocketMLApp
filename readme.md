@@ -402,11 +402,48 @@ models:
 - ✅ Limit category selections
 - ✅ Clear Streamlit cache: `streamlit cache clear`
 
-**Import Errors**:
+#### Git LFS Push Errors
 
-- ✅ Activate virtual environment
-- ✅ Install requirements: `pip install -r requirements.txt`
-- ✅ Check Python version (3.8+ required)
+- **DNS/Network Failure**: If you see errors like `lookup github.com: no such host`, verify your internet connection and DNS resolution:
+  ```powershell
+  nslookup github.com
+  ```
+- **Proxy Configuration**: If behind a proxy or firewall, configure Git HTTP proxy:
+  ```powershell
+  git config --global http.proxy http://<proxy_server>:<port>
+  git config --global http.sslVerify false  # if SSL issues
+  ```
+- **Check LFS Endpoint**: Inspect LFS settings with:
+  ```powershell
+  git lfs env
+  ```
+- **Retry with Verbose Logging**: Enable detailed logs to diagnose:
+  ```powershell
+  GIT_TRACE=1 GIT_CURL_VERBOSE=1 git lfs push origin main
+  ```
+- **Use SSH Remote**: Switch to SSH URL to avoid HTTPS issues:
+  ```powershell
+  git remote set-url origin git@github.com:<user>/<repo>.git
+  ```
+- **Clear LFS Cache**: Remove and refetch LFS objects:
+  ```powershell
+  git lfs fetch --all
+  ```
+- **Firewall/Port Blocking**: Ensure port 443 is open. Test with:
+  ```powershell
+  curl -v https://github.com
+  ```
+- **Authentication / Token Issues**: For HTTPS remotes, use a Personal Access Token (PAT) with LFS scopes:
+  ```powershell
+  git remote set-url origin https://<USERNAME>:<PAT>@github.com/Abhisach687/RocketMLApp.git
+  ```
+- **Reinitialize LFS Hooks**: If hooks are corrupted, reinstall:
+  ```powershell
+  git lfs uninstall
+  git lfs install
+  git lfs track "*.pkl" "*.pt"
+  git add .gitattributes
+  ```
 
 ### Data Validation
 
@@ -660,9 +697,52 @@ python src/tune_GRU4REC.py
 
 **4. Poor performance**
 
-- Reduce date range for large datasets
-- Limit category selection
-- Close other resource-intensive applications
+- ✅ Reduce date range for large datasets
+- ✅ Limit category selection
+- ✅ Clear Streamlit cache: `streamlit cache clear`
+
+#### Git LFS Push Errors
+
+- **DNS/Network Failure**: If you see errors like `lookup github.com: no such host`, verify your internet connection and DNS resolution:
+  ```powershell
+  nslookup github.com
+  ```
+- **Proxy Configuration**: If behind a proxy or firewall, configure Git HTTP proxy:
+  ```powershell
+  git config --global http.proxy http://<proxy_server>:<port>
+  git config --global http.sslVerify false  # if SSL issues
+  ```
+- **Check LFS Endpoint**: Inspect LFS settings with:
+  ```powershell
+  git lfs env
+  ```
+- **Retry with Verbose Logging**: Enable detailed logs to diagnose:
+  ```powershell
+  GIT_TRACE=1 GIT_CURL_VERBOSE=1 git lfs push origin main
+  ```
+- **Use SSH Remote**: Switch to SSH URL to avoid HTTPS issues:
+  ```powershell
+  git remote set-url origin git@github.com:<user>/<repo>.git
+  ```
+- **Clear LFS Cache**: Remove and refetch LFS objects:
+  ```powershell
+  git lfs fetch --all
+  ```
+- **Firewall/Port Blocking**: Ensure port 443 is open. Test with:
+  ```powershell
+  curl -v https://github.com
+  ```
+- **Authentication / Token Issues**: For HTTPS remotes, use a Personal Access Token (PAT) with LFS scopes:
+  ```powershell
+  git remote set-url origin https://<USERNAME>:<PAT>@github.com/Abhisach687/RocketMLApp.git
+  ```
+- **Reinitialize LFS Hooks**: If hooks are corrupted, reinstall:
+  ```powershell
+  git lfs uninstall
+  git lfs install
+  git lfs track "*.pkl" "*.pt"
+  git add .gitattributes
+  ```
 
 ### Data Requirements
 
