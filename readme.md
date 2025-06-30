@@ -482,6 +482,23 @@ EXPOSE 8501
 CMD ["streamlit", "run", "app.py"]
 ```
 
+### Streamlit Community Cloud
+
+Follow these steps to connect your app to GitHub and deploy:
+
+1. Create a new repository on GitHub (public or private).
+2. In your project folder:
+   ```bash
+   git init
+   git add .
+   git commit -m "Initial commit"
+   git remote add origin https://github.com/<YOUR_USERNAME>/<REPO_NAME>.git
+   git push -u origin main
+   ```
+3. Go to https://share.streamlit.io and click **New app**.
+4. Select your GitHub account, repository, branch (`main`), and entrypoint (`app.py`).
+5. Click **Deploy**—Streamlit Cloud will install dependencies and launch your app.
+
 ## 📈 Performance Optimization
 
 ### Data Loading
