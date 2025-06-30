@@ -692,15 +692,6 @@ export STREAMLIT_SERVER_ADDRESS=localhost
 
 ## 🎨 Customization
 
-### Theming
-
-The dashboard uses a modern CSS theme located in `assets/clean_theme.css`. You can customize:
-
-- Colors and gradients
-- Typography
-- Layout spacing
-- Component styling
-
 ### Adding New Visualizations
 
 To add new chart types:
@@ -737,15 +728,3 @@ This dashboard analyzes historical e-commerce data from 2015, including:
 ## 📄 License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
-
-## 📞 Support
-
-For questions or issues:
-
-1. Check the troubleshooting section above
-2. Review the project documentation
-3. Open an issue on GitHub
-
----
-
-**SmartRocket Analytics Dashboard** - Transforming e-commerce data into actionable insights 📊🚀
